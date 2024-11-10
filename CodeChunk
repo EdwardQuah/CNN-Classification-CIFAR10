@@ -1,0 +1,363 @@
+# Setup and importing libraries 
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from tensorflow.keras.datasets import cifar10
+from sklearn.model_selection import train_test_split
+
+# Hyperparameter Tuning with Memory Management
+import keras_tuner as kt
+from tensorflow.keras import backend as K
+import gc
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import Adam
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Data is loaded and split into training, validation and test sets. 
+# Datasets are converted to float32 for better compatibility with GPU/M2chips for faster training.
+# Dataset is then standardised to center and scale data, with the mean and std of each channel.
+# Load CIFAR-10 data
+(X_train_full, y_train_full), (X_test, y_test) = cifar10.load_data()
+
+# Flatten the labels to ensure they are 1D arrays
+y_train_full = y_train_full.flatten()
+y_test = y_test.flatten()
+
+# Split training data into training and validation sets with stratification
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full, y_train_full, test_size=0.2, stratify=y_train_full, random_state=42
+)
+
+# Convert to float32 for faster computations
+X_train, X_val, X_test = X_train.astype('float32'), X_val.astype('float32'), X_test.astype('float32')
+
+# Standardize based on CIFAR-10 dataset statistics
+mean = [0.4914, 0.4822, 0.4465]
+std = [0.2023, 0.1994, 0.2010]
+X_train = (X_train - mean) / std
+X_val = (X_val - mean) / std
+X_test = (X_test - mean) / std
+
+# Set up data augmentation for training
+datagen = ImageDataGenerator(
+    horizontal_flip=True,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+)
+train_gen = datagen.flow(X_train, y_train, batch_size=32)
+
+# Print shapes for confirmation
+print("Training set shape:", X_train.shape, y_train.shape)
+print("Validation set shape:", X_val.shape, y_val.shape)
+print("Test set shape:", X_test.shape, y_test.shape)
+
+# Optional: Check class distribution
+unique, counts = np.unique(y_train, return_counts=True)
+print("Training set class distribution:", dict(zip(unique, counts)))
+
+# Batch Norm AND Increased Filters 
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+import matplotlib.pyplot as plt
+
+# Define the CNN model with increased filters
+model = Sequential([
+    Conv2D(64, (3, 3), activation='relu', input_shape=(32, 32, 3)),
+    BatchNormalization(),
+    Conv2D(64, (3, 3), activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D((2, 2)),
+    Dropout(0.25),
+
+    Conv2D(128, (3, 3), activation='relu'),
+    BatchNormalization(),
+    Conv2D(128, (3, 3), activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D((2, 2)),
+    Dropout(0.25),
+
+    Conv2D(256, (3, 3), activation='relu'),
+    BatchNormalization(),
+    Conv2D(256, (3, 3), activation='relu'),
+    BatchNormalization(),
+
+    Flatten(),
+    Dense(512, activation='relu'),  # Increased from 256
+    Dropout(0.5),
+    Dense(256, activation='relu'),  # Increased from 128
+    Dropout(0.5),
+    Dense(10, activation='softmax')
+])
+
+# Compile the model
+model.compile(optimizer='adam',
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
+
+# Set up callbacks
+early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3)
+
+# Train the model with data augmentation
+history = model.fit(datagen.flow(X_train, y_train, batch_size=64),
+                    epochs=50,
+                    validation_data=(X_val, y_val),
+                    callbacks=[early_stopping, lr_scheduler])
+
+# Evaluate the model on the test set
+test_loss, test_accuracy = model.evaluate(X_test, y_test)
+print(f'Test Accuracy with Increased Filters: {test_accuracy}')
+
+# Plot training and validation accuracy and loss
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy with Increased Filters')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss with Increased Filters')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+# # Display a simple summary of the model with layer names, output shapes, and parameter counts
+model.summary()
+
+
+# Resnet-18
+from tensorflow.keras.layers import Input, Add, Conv2D, BatchNormalization, ReLU, MaxPooling2D, Flatten, Dense, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+
+# Define the ResNet block (Basic Block)
+def resnet_block(x, filters, strides=(1, 1)):
+    # Save input for the shortcut connection
+    x_skip = x
+
+    # First convolutional layer in the block
+    x = Conv2D(filters, (3, 3), strides=strides, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    # Second convolutional layer in the block
+    x = Conv2D(filters, (3, 3), strides=(1, 1), padding='same')(x)
+    x = BatchNormalization()(x)
+
+    # Adjust dimensions with a convolutional layer on the shortcut path if necessary
+    if strides != (1, 1) or x_skip.shape[-1] != filters:
+        x_skip = Conv2D(filters, (1, 1), strides=strides, padding='same')(x_skip)
+        x_skip = BatchNormalization()(x_skip)
+
+    # Add the shortcut connection and apply ReLU activation
+    x = Add()([x, x_skip])
+    x = ReLU()(x)
+    return x
+
+# Define the ResNet-18 model
+def build_resnet18(input_shape=(32, 32, 3), num_classes=10):
+    inputs = Input(shape=input_shape)
+
+    # Initial convolutional layer
+    x = Conv2D(64, (3, 3), strides=(1, 1), padding='same')(inputs)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    x = MaxPooling2D((2, 2))(x)
+
+    # Residual blocks
+    x = resnet_block(x, 64)
+    x = resnet_block(x, 64)
+
+    x = resnet_block(x, 128, strides=(2, 2))
+    x = resnet_block(x, 128)
+
+    x = resnet_block(x, 256, strides=(2, 2))
+    x = resnet_block(x, 256)
+
+    x = resnet_block(x, 512, strides=(2, 2))
+    x = resnet_block(x, 512)
+
+    # Global average pooling and dense layer for output
+    x = GlobalAveragePooling2D()(x)
+    outputs = Dense(num_classes, activation='softmax')(x)
+
+    # Create the model
+    model = Model(inputs, outputs)
+    return model
+
+# Instantiate and compile the model
+resnet18_model = build_resnet18()
+resnet18_model.compile(optimizer=Adam(learning_rate=1e-4),
+                       loss='sparse_categorical_crossentropy',
+                       metrics=['accuracy'])
+
+# Early stopping callback
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+# Train the model
+history_resnet18 = resnet18_model.fit(
+    datagen.flow(X_train, y_train, batch_size=64),
+    epochs=50,
+    validation_data=(X_val, y_val),
+    callbacks=[early_stopping]
+)
+
+# Evaluate on the test set
+test_loss_resnet18, test_accuracy_resnet18 = resnet18_model.evaluate(X_test, y_test)
+print(f'ResNet-18 Test Accuracy: {test_accuracy_resnet18}')
+
+# Plot training and validation accuracy and loss
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history_resnet18.history['accuracy'], label='Training Accuracy')
+plt.plot(history_resnet18.history['val_accuracy'], label='Validation Accuracy')
+plt.title('ResNet-18 Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history_resnet18.history['loss'], label='Training Loss')
+plt.plot(history_resnet18.history['val_loss'], label='Validation Loss')
+plt.title('ResNet-18 Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+resnet18_model.summary()
+
+# AlexNet
+alexnet_model = Sequential([
+    Conv2D(96, (11, 11), strides=(4, 4), activation='relu', input_shape=(32, 32, 3)),
+    BatchNormalization(),
+    MaxPooling2D((3, 3), strides=(2, 2)),
+
+    Conv2D(256, (5, 5), padding='same', activation='relu'),
+    BatchNormalization(),
+    MaxPooling2D((3, 3), strides=(2, 2)),
+
+    Conv2D(384, (3, 3), padding='same', activation='relu'),
+    Conv2D(384, (3, 3), padding='same', activation='relu'),
+    Conv2D(256, (3, 3), padding='same', activation='relu'),
+    MaxPooling2D((3, 3), strides=(2, 2)),
+
+    Flatten(),
+    Dense(4096, activation='relu'),
+    Dropout(0.5),
+    Dense(4096, activation='relu'),
+    Dropout(0.5),
+    Dense(10, activation='softmax')
+])
+
+# Compile and train
+alexnet_model.compile(optimizer=Adam(learning_rate=1e-4),
+                      loss='sparse_categorical_crossentropy',
+                      metrics=['accuracy'])
+
+history_alexnet = alexnet_model.fit(
+    datagen.flow(X_train, y_train, batch_size=64),
+    epochs=50,
+    validation_data=(X_val, y_val),
+    callbacks=[early_stopping]
+)
+
+# Evaluate and plot
+test_loss_alexnet, test_accuracy_alexnet = alexnet_model.evaluate(X_test, y_test)
+print(f'AlexNet Test Accuracy: {test_accuracy_alexnet}')
+
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history_alexnet.history['accuracy'], label='Training Accuracy')
+plt.plot(history_alexnet.history['val_accuracy'], label='Validation Accuracy')
+plt.title('AlexNet Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history_alexnet.history['loss'], label='Training Loss')
+plt.plot(history_alexnet.history['val_loss'], label='Validation Loss')
+plt.title('AlexNet Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+
+alexnet_model.summary()
+
+from tensorflow.keras.applications import MobileNet
+from tensorflow.keras.layers import Dense, Flatten, BatchNormalization, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+
+# Load MobileNet without pre-trained weights for CIFAR-10
+base_model = MobileNet(weights=None, include_top=False, input_shape=(32, 32, 3))
+
+# Add custom top layers for CIFAR-10 with Batch Normalization and Dropout
+x = base_model.output
+x = Flatten()(x)
+x = Dense(128, activation='relu')(x)  # Reduced units to 128
+x = BatchNormalization()(x)  # Added Batch Normalization
+x = Dropout(0.5)(x)  # Added Dropout
+x = Dense(10, activation='softmax')(x)
+
+mobilenet_model = Model(inputs=base_model.input, outputs=x)
+
+# Compile with a slightly higher learning rate
+mobilenet_model.compile(optimizer=Adam(learning_rate=1e-3),  # Increased learning rate for faster convergence
+                        loss='sparse_categorical_crossentropy',
+                        metrics=['accuracy'])
+
+# Callbacks: EarlyStopping and ReduceLROnPlateau
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=1)
+
+# Train the model
+history_mobilenet = mobilenet_model.fit(
+    datagen.flow(X_train, y_train, batch_size=64),
+    epochs=100,  # Increased epochs to give more training time
+    validation_data=(X_val, y_val),
+    callbacks=[early_stopping, reduce_lr]
+)
+
+# Evaluate and plot
+test_loss_mobilenet, test_accuracy_mobilenet = mobilenet_model.evaluate(X_test, y_test)
+print(f'MobileNet Test Accuracy: {test_accuracy_mobilenet}')
+
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(history_mobilenet.history['accuracy'], label='Training Accuracy')
+plt.plot(history_mobilenet.history['val_accuracy'], label='Validation Accuracy')
+plt.title('MobileNet Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history_mobilenet.history['loss'], label='Training Loss')
+plt.plot(history_mobilenet.history['val_loss'], label='Validation Loss')
+plt.title('MobileNet Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+mobilenet_model.summary()
+
